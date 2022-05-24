@@ -1,0 +1,95 @@
+{
+    "common": {
+        "name": "ezhome",
+        "version": "0.0.1",
+        "news": {
+            "0.0.1": {
+                "en": "initial release",
+                "de": "Erstveröffentlichung",
+                "ru": "Начальная версия",
+                "pt": "lançamento inicial",
+                "nl": "Eerste uitgave",
+                "fr": "Première version",
+                "it": "Versione iniziale",
+                "es": "Versión inicial",
+                "pl": "Pierwsze wydanie",
+                "zh-cn": "首次出版"
+            }
+        },
+        "title": "EzHome",
+        "titleLang": {
+            "en": "EzHome",
+            "de": "EzHome",
+            "ru": "ЭзХом",
+            "pt": "EzHome",
+            "nl": "EzHome",
+            "fr": "EzHome",
+            "it": "Ez Home",
+            "es": "EzHome",
+            "pl": "EzHome",
+            "zh-cn": "易家"
+        },
+        "desc": {
+            "en": "ezhome",
+            "de": "ezhome",
+            "ru": "эжоме",
+            "pt": "ezhome",
+            "nl": "ezhome",
+            "fr": "ezhome",
+            "it": "ezhome",
+            "es": "ezhome",
+            "pl": "ezhome",
+            "zh-cn": "ezhome"
+        },
+        "authors": ["stesto <s.stodder@hotmail.de>"],
+        "keywords": ["ezhome", "diy", "esp", "esp8266"],
+        "license": "MIT",
+        "platform": "Javascript/Node.js",
+        "main": "build/main.js",
+        "icon": "ezhome.png",
+        "enabled": true,
+        "extIcon": "https://raw.githubusercontent.com/stesto/ioBroker.ezhome/main/admin/ezhome.png",
+        "readme": "https://github.com/stesto/ioBroker.ezhome/blob/main/README.md",
+        "loglevel": "info",
+        "mode": "daemon",
+        "type": "iot-systems",
+        "compact": true,
+        "connectionType": "local",
+        "dataSource": "push",
+        "materialize": true,
+        "supportCustoms": true,
+        "dependencies": [
+            {
+                "js-controller": ">=2.0.0"
+            }
+        ]
+    },
+    "native": {
+        "option1": true,
+        "option2": "42"
+    },
+    "objects": [],
+    "instanceObjects": [
+        {
+            "_id": "info",
+            "type": "channel",
+            "common": {
+                "name": "Information"
+            },
+            "native": {}
+        },
+        {
+            "_id": "info.connection",
+            "type": "state",
+            "common": {
+                "role": "indicator.connected",
+                "name": "Device or service connected",
+                "type": "boolean",
+                "read": true,
+                "write": false,
+                "def": false
+            },
+            "native": {}
+        }
+    ]
+}
