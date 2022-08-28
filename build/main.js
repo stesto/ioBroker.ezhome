@@ -31,52 +31,108 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target, mod));
 var utils = __toESM(require("@iobroker/adapter-core"));
+var ws = __toESM(require("websocket"));
 class Ezhome extends utils.Adapter {
   constructor(options = {}) {
     super(__spreadProps(__spreadValues({}, options), {
       name: "ezhome"
     }));
+    this.onWsError = (error) => {
+      this.log.debug("[ws] connection error: " + error.name + " (" + error.message + ")");
+    };
+    this.onWsClose = (_, desc) => {
+      this.log.debug("[ws] connection closed: " + desc);
+      this.connectToClient();
+    };
+    this.onWsStateDefinitionsMessage = (msg) => {
+      if (msg.type !== "utf8")
+        return;
+      this.log.debug("[ws] receives state definitions");
+      this.wsConnection.removeListener("message", this.onWsStateDefinitionsMessage);
+      this.wsConnection.on("message", this.onWsStateUpdateMessage);
+      const devices = JSON.parse(msg.utf8Data);
+      for (const device of devices) {
+        for (const state of device.states) {
+          const stateId = state.id;
+          delete state.id;
+          this.setObjectNotExistsAsync(device.id + "." + stateId, {
+            type: "state",
+            common: state,
+            native: {}
+          });
+          this.subscribeStates(device.id + "." + stateId);
+        }
+      }
+    };
+    this.onWsStateUpdateMessage = (msg) => {
+      if (msg.type !== "utf8")
+        return;
+      if (msg.utf8Data == "{}") {
+        this.handleHeartbeat();
+        return;
+      }
+      const devices = JSON.parse(msg.utf8Data);
+      for (const device of devices) {
+        for (const state in device.s) {
+          this.setState(device.i + "." + state, device.s[state], true);
+        }
+      }
+    };
+    this.onWsConnected = (connection) => {
+      this.wsConnection = connection;
+      this.log.debug("[ws] connected");
+      connection.on("error", this.onWsError);
+      connection.on("close", this.onWsClose);
+      connection.on("message", this.onWsStateDefinitionsMessage);
+      this.clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = this.setInterval(this.sendHeartbeat.bind(this), 6e4);
+      this.log.debug("[ws] attached connection callbacks");
+    };
     this.on("ready", this.onReady.bind(this));
     this.on("stateChange", this.onStateChange.bind(this));
     this.on("unload", this.onUnload.bind(this));
   }
+  sendHeartbeat() {
+    if (this.wsConnection) {
+      this.wsConnection.send("{}");
+      this.log.debug("[ws] heartbeat sent");
+    }
+  }
+  handleHeartbeat() {
+    this.log.debug("[ws] got heartbeat response");
+  }
+  connectToClient() {
+    this.wsClient.connect("ws://192.168.69.45/ws");
+  }
   async onReady() {
-    this.setState("info.connection", false, true);
-    this.log.info("config option1: " + this.config.option1);
-    this.log.info("config option2: " + this.config.option2);
-    await this.setObjectNotExistsAsync("testVariable", {
-      type: "state",
-      common: {
-        name: "testVariable",
-        type: "boolean",
-        role: "indicator",
-        read: true,
-        write: true
-      },
-      native: {}
-    });
-    this.subscribeStates("testVariable");
-    await this.setStateAsync("testVariable", true);
-    await this.setStateAsync("testVariable", { val: true, ack: true });
-    await this.setStateAsync("testVariable", { val: true, ack: true, expire: 30 });
-    let result = await this.checkPasswordAsync("admin", "iobroker");
-    this.log.info("check user admin pw iobroker: " + result);
-    result = await this.checkGroupAsync("admin", "admin");
-    this.log.info("check group user admin group admin: " + result);
+    this.wsClient = new ws.client();
+    this.wsClient.on("connectFailed", this.onWsError);
+    this.wsClient.on("connect", this.onWsConnected);
+    this.log.debug("[ws] attached client callbacks");
+    this.connectToClient();
   }
   onUnload(callback) {
     try {
+      this.wsConnection.close();
+      this.clearInterval(this.heartbeatInterval);
       callback();
     } catch (e) {
       callback();
     }
   }
   onStateChange(id, state) {
-    if (state) {
-      this.log.info(`state ${id} changed: ${state.val} (ack = ${state.ack})`);
-    } else {
-      this.log.info(`state ${id} deleted`);
+    if (!state || state.ack)
+      return;
+    if (!this.wsConnection.connected) {
+      this.log.debug("[ws] no client connected. Skip sending values");
+      return;
     }
+    const idSplit = id.split(".");
+    const obj = {};
+    obj[idSplit[idSplit.length - 1]] = state.val;
+    const arr = [{ i: Number(idSplit[idSplit.length - 2]), s: obj }];
+    this.wsConnection.sendUTF(JSON.stringify(arr));
+    this.log.debug("[ws] send new state values");
   }
 }
 if (require.main !== module) {
