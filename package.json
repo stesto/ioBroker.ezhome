@@ -19,7 +19,7 @@
     "url": "https://github.com/stesto/ioBroker.ezhome"
   },
   "dependencies": {
-    "@iobroker/adapter-core": "^2.6.0",
+    "@iobroker/adapter-core": "^2.6.6",
     "websocket": "^1.0.34"
   },
   "devDependencies": {
