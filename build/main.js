@@ -37,30 +37,102 @@ class Ezhome extends utils.Adapter {
     super(__spreadProps(__spreadValues({}, options), {
       name: "ezhome"
     }));
+    this.devices = {};
+    this.on("ready", this.onReady.bind(this));
+    this.on("stateChange", this.onStateChange.bind(this));
+    this.on("unload", this.onUnload.bind(this));
+  }
+  async onReady() {
+    this.setObjectNotExists("deviceIPs", {
+      type: "state",
+      common: {
+        read: true,
+        write: true,
+        role: "list",
+        name: "IP-Addresses",
+        type: "string"
+      },
+      native: {}
+    });
+    this.getStateAsync("deviceIPs").then((state) => {
+      const ipRegex = /(?:[0-9]{1,3}\.){3}[0-9]{1,3}/g;
+      const ips = `${state == null ? void 0 : state.val}`.match(ipRegex);
+      if (ips === null) {
+        this.log.error("No IPs found");
+        return;
+      }
+      this.log.debug(`Found IPs: ${ips.join(", ")}`);
+      for (const ip of ips) {
+        const dev = new EzHomeDevice(this, ip, ip.split(".")[3]);
+        this.devices[dev.id] = dev;
+        dev.connect();
+      }
+      this.setState("deviceIPs", ips.join("\n"), true);
+      this.setState("info.connection", true, true);
+    });
+  }
+  onUnload(callback) {
+    try {
+      this.setState("info.connection", false, true);
+      for (const devId in this.devices) {
+        const dev = this.devices[devId];
+        dev.shutdown();
+        this.clearInterval(dev.heartbeatInterval);
+      }
+      callback();
+    } catch (e) {
+      callback();
+    }
+  }
+  onStateChange(id, state) {
+    if (!state || state.ack)
+      return;
+    const stateIdSplit = id.replace(`${this.namespace}.`, "").split(".");
+    const devId = stateIdSplit[0];
+    stateIdSplit.shift();
+    this.devices[devId].stateChanged(stateIdSplit, state.val);
+  }
+}
+class EzHomeDevice {
+  constructor(ezHome, ip, id) {
+    this.shouldShutdown = false;
     this.onWsError = (error) => {
-      this.log.debug("[ws] connection error: " + error.name + " (" + error.message + ")");
+      this.ezHome.log.debug(`[ws|${this.id}] connection error: ${error.name} (${error.message})`);
+    };
+    this.onWsConnected = (connection) => {
+      this.wsConnection = connection;
+      this.ezHome.log.debug(`[ws|${this.id}] connected`);
+      connection.on("error", this.onWsError);
+      connection.on("close", this.onWsClose);
+      connection.on("message", this.onWsStateDefinitionsMessage);
+      this.heartbeatInterval = this.ezHome.setInterval(() => this.sendHeartbeat(), 5 * 60 * 1e3);
+      this.ezHome.log.debug(`[ws|${this.id}] attached connection callbacks`);
     };
     this.onWsClose = (_, desc) => {
-      this.log.debug("[ws] connection closed: " + desc);
-      this.connectToClient();
+      this.ezHome.log.debug(`[ws|${this.id}] connection closed: ${desc}`);
+      this.ezHome.clearInterval(this.heartbeatInterval);
+      if (!this.shouldShutdown) {
+        this.connect();
+      }
     };
     this.onWsStateDefinitionsMessage = (msg) => {
       if (msg.type !== "utf8")
         return;
-      this.log.debug("[ws] receives state definitions");
+      this.ezHome.log.debug(`[ws|${this.id}] received state definitions`);
       this.wsConnection.removeListener("message", this.onWsStateDefinitionsMessage);
       this.wsConnection.on("message", this.onWsStateUpdateMessage);
-      const devices = JSON.parse(msg.utf8Data);
-      for (const device of devices) {
-        for (const state of device.states) {
+      const virtualDevices = JSON.parse(msg.utf8Data);
+      for (const virtualDev of virtualDevices) {
+        for (const state of virtualDev.states) {
           const stateId = state.id;
           delete state.id;
-          this.setObjectNotExistsAsync(device.id + "." + stateId, {
+          const statePath = [this.id, virtualDev.id, stateId].join(".");
+          this.ezHome.setObjectNotExistsAsync(statePath, {
             type: "state",
             common: state,
             native: {}
           });
-          this.subscribeStates(device.id + "." + stateId);
+          this.ezHome.subscribeStates(statePath);
         }
       }
     };
@@ -74,65 +146,43 @@ class Ezhome extends utils.Adapter {
       const devices = JSON.parse(msg.utf8Data);
       for (const device of devices) {
         for (const state in device.s) {
-          this.setState(device.i + "." + state, device.s[state], true);
+          this.ezHome.setState([this.id, device.i, state].join("."), device.s[state], true);
         }
       }
     };
-    this.onWsConnected = (connection) => {
-      this.wsConnection = connection;
-      this.log.debug("[ws] connected");
-      connection.on("error", this.onWsError);
-      connection.on("close", this.onWsClose);
-      connection.on("message", this.onWsStateDefinitionsMessage);
-      this.clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = this.setInterval(this.sendHeartbeat.bind(this), 6e4);
-      this.log.debug("[ws] attached connection callbacks");
-    };
-    this.on("ready", this.onReady.bind(this));
-    this.on("stateChange", this.onStateChange.bind(this));
-    this.on("unload", this.onUnload.bind(this));
+    this.ezHome = ezHome;
+    this.ip = ip;
+    this.id = id;
+  }
+  getUrl() {
+    return `ws://${this.ip}/ws`;
+  }
+  connect() {
+    this.wsClient = new ws.client();
+    this.wsClient.on("connectFailed", this.onWsError);
+    this.wsClient.on("connect", this.onWsConnected);
+    this.wsClient.connect(this.getUrl());
   }
   sendHeartbeat() {
     if (this.wsConnection) {
       this.wsConnection.send("{}");
-      this.log.debug("[ws] heartbeat sent");
+      this.ezHome.log.debug(`[ws|${this.id}] heartbeat sent`);
     }
   }
   handleHeartbeat() {
-    this.log.debug("[ws] got heartbeat response");
+    this.ezHome.log.debug(`[ws|${this.id}] got heartbeat response`);
   }
-  connectToClient() {
-    this.wsClient.connect("ws://192.168.69.45/ws");
-  }
-  async onReady() {
-    this.wsClient = new ws.client();
-    this.wsClient.on("connectFailed", this.onWsError);
-    this.wsClient.on("connect", this.onWsConnected);
-    this.log.debug("[ws] attached client callbacks");
-    this.connectToClient();
-  }
-  onUnload(callback) {
-    try {
-      this.wsConnection.close();
-      this.clearInterval(this.heartbeatInterval);
-      callback();
-    } catch (e) {
-      callback();
-    }
-  }
-  onStateChange(id, state) {
-    if (!state || state.ack)
-      return;
-    if (!this.wsConnection.connected) {
-      this.log.debug("[ws] no client connected. Skip sending values");
-      return;
-    }
-    const idSplit = id.split(".");
+  stateChanged(path, val) {
     const obj = {};
-    obj[idSplit[idSplit.length - 1]] = state.val;
-    const arr = [{ i: Number(idSplit[idSplit.length - 2]), s: obj }];
+    obj[path[1]] = val;
+    const arr = [{ i: Number(path[0]), s: obj }];
     this.wsConnection.sendUTF(JSON.stringify(arr));
-    this.log.debug("[ws] send new state values");
+    this.ezHome.log.debug(`[ws|${this.id}] sent: ${path.join(".")} -> ${val}`);
+  }
+  shutdown() {
+    var _a;
+    this.shouldShutdown = true;
+    (_a = this.wsConnection) == null ? void 0 : _a.close();
   }
 }
 if (require.main !== module) {
